@@ -1,3 +1,0 @@
-﻿  main.cpp
-C:\Users\fess2\Desktop\любимая учеба\проект по программированию 1 семестр\MultiPlayerDinosaur\main.cpp(842,64): warning C4267: инициализация: преобразование из "size_t" в "int"; возможна потеря данных
-  MultiPlayerDinosaur.vcxproj -> C:\Users\fess2\Desktop\любимая учеба\проект по программированию 1 семестр\MultiPlayerDinosaur\x64\Debug\MultiPlayerDinosaur.exe
