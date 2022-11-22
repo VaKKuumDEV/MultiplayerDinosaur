@@ -32,6 +32,7 @@ void serverModeReceive();
 void serverModeSend();
 void waitForStart();
 void clientModeReceive();
+void clientModeSend();
 std::pair<int, int> getConsoleSize();
 vector<string> split(string str, string delimiter);
 string randomString(const int length);
@@ -230,10 +231,14 @@ private:
     string nickname = "";
     bool inLive = true;
     bool inited = false;
+    bool working = true;
     bool gameStarted = false;
     int startTicks = 0;
     SOCKET clientSocket;
     string recBuffer = "";
+
+    bool sendingData = false;
+    queue<string> sendBuffer = queue<string>();
 
 public:
     Client() = delete;
@@ -318,37 +323,100 @@ public:
     bool isInited() {
         return inited;
     }
+    void addInBuffer(string val) {
+        sendBuffer.push(val);
+    }
+    void popBuffer() {
+        sendBuffer.pop();
+    }
+    string frontBuffer() {
+        return sendBuffer.front();
+    }
+    bool hasBufferData() {
+        return sendBuffer.size() > 0;
+    }
+    bool isSendingData() {
+        return sendingData;
+    }
+    void setSendingData(bool val) {
+        sendingData = val;
+    }
+    bool isWorking() {
+        return working;
+    }
+    void setWorking(bool val) {
+        working = val;
+    }
 
     void process() {
-        
+        if (recBuffer.size() > 0) {
+            vector<string> bufferSplits = split(recBuffer, "&");
+            recBuffer = "";
+
+            for (string bufferSplit : bufferSplits) {
+                if (bufferSplit.size() == 0) continue;
+
+                vector<string> splitSplits = split(bufferSplit, ";");
+                if (splitSplits.size() > 0) {
+                    string status = splitSplits[0];
+                    if (status == "ok" && splitSplits.size() > 1) {
+                        string mode = splitSplits[1];
+                        //доделать обработку
+                        if (mode == "started") {
+                            gameStarted = true;
+                        }
+                        else {
+                            vector<string> splitSplitSplits = split(mode, ":");
+                            if (splitSplitSplits.size() == 2) {
+                                string modeMode = splitSplitSplits[0];
+                                int ticksLeft = stoi(splitSplitSplits[1]);
+                                startTicks = ticksLeft;
+                            }
+                        }
+
+                        scores.clear();
+                        for (int i = 2; i < splitSplits.size(); i++) {
+                            vector<string> playerData = split(splitSplits[i], ":");
+                            if (playerData.size() == 3) {
+                                string playerNick = playerData[0];
+                                int playerScore = stoi(playerData[1]);
+                                bool playerInLive = playerData[2] == "1";
+                                Score playerS = { playerNick, playerScore, playerInLive };
+                                scores.push_back(playerS);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     void clientReceive() {
         char buffer[1024] = { 0 };
 
         string receivedString = "";
-        string recStrBuffer = "";
-        bool hasError = false;
+        int receivedBytes = recv(clientSocket, buffer, sizeof(buffer), 0);
+        if (receivedBytes != SOCKET_ERROR) receivedString = string(buffer);
 
-        int receivedBytes;
-        do {
-            receivedBytes = recv(clientSocket, buffer, sizeof(buffer), 0);
-            if (receivedBytes == SOCKET_ERROR) {
-                //ошибка приема сокета
-                hasError = true;
-                recStrBuffer = "";
-            }
-            else recStrBuffer = string(buffer);
-
-            memset(buffer, 0, sizeof(buffer));
-            receivedString += recStrBuffer;
-
-            std::chrono::milliseconds timespan(10);
-            std::this_thread::sleep_for(timespan);
-        } while (receivedBytes != SOCKET_ERROR && recStrBuffer.size() > 0);
-
+        memset(buffer, 0, sizeof(buffer));
         recBuffer += receivedString;
-        if (receivedString.size() > 0) cout << "received: " << receivedString << endl;
+    }
+
+    void clientSend() {
+        if (!isSendingData() && hasBufferData()) {
+            setSendingData(true);
+            sendToServer(frontBuffer());
+            popBuffer();
+
+            setSendingData(false);
+        }
+    }
+
+    void sendToServer(string message) {
+        message += "&";
+
+        int sentBytes = send(clientSocket, message.c_str(), (int)strlen(message.c_str()), 0);
+        if (sentBytes == SOCKET_ERROR) cout << "Error on sending data to socket: " << WSAGetLastError() << endl;
     }
 };
 
@@ -437,16 +505,9 @@ private:
 
     void sendToClient(ServClient client, string message) {
         message += "&";
-        int sentBytes = SOCKET_ERROR;
-        int sentPieces = 0;
-        do {
-            string mBuffer = message.substr(sentPieces, message.size() - sentPieces);
-            if (mBuffer.size() == 0) break;
 
-            sentBytes = send(*client.getSocket(), mBuffer.c_str(), (int)sizeof(mBuffer.c_str()), 0);
-            if (sentBytes != SOCKET_ERROR) sentPieces += sentBytes;
-            else break;
-        } while (sentBytes != SOCKET_ERROR);
+        int sentBytes = send(*client.getSocket(), message.c_str(), (int)strlen(message.c_str()), 0);
+        if (sentBytes == SOCKET_ERROR) cout << "Error on sending data to socket: " << WSAGetLastError() << endl;
     }
 
 public:
@@ -562,7 +623,7 @@ public:
                 }
 
                 string myScoreStr = nickname + ":" + to_string(myScore) + ":" + (myPlaying ? "1" : "0");
-                clientMessage += myScoreStr + ";";
+                clientMessage += myScoreStr;
 
                 client->addInBuffer(clientMessage);
             }
@@ -580,22 +641,16 @@ public:
 
             ServClient client = clients[identificator];
             string receivedString = "";
-            string recStrBuffer = "";
             bool hasError = false;
 
             if (!client.isInLive()) continue;
             SOCKET* clientSocket = client.getSocket();
 
-            do {
-                if (recv(*clientSocket, buffer, sizeof(buffer), 0) == SOCKET_ERROR) {
-                    //ошибка приема сокета
-                    hasError = true;
-                    continue;
-                }
-
-                recStrBuffer = string(buffer);
-                receivedString += recStrBuffer;
-            } while (!hasError && recStrBuffer.length() > 0);
+            if (recv(*clientSocket, buffer, sizeof(buffer), 0) == SOCKET_ERROR) {
+                //ошибка приема сокета
+                hasError = true;
+            }
+            receivedString = string(buffer);
             memset(buffer, 0, sizeof(buffer));
 
             if (!hasError) {
@@ -762,6 +817,7 @@ int main() {
                 }
                 else if (currentMode == CLIENT) {
                     receiveThread = std::thread(clientModeReceive);
+                    sendThread = std::thread(clientModeSend);
 
                     std::thread waitThread = std::thread(waitForStart);
                     waitThread.join();
@@ -1013,17 +1069,17 @@ void loopLogic() {
             lastMatrix = matrix;
         }
 
+        if (currentMode == SERVER) {
+            server->setPlaying(isPlaying);
+            server->setScore(playScore);
+            server->process();
+        }
+        else if (currentMode == CLIENT) {
+            //serverClient->process();
+        }
+
         std::chrono::milliseconds timespan((int)(1000 / TPS));
         std::this_thread::sleep_for(timespan);
-    }
-
-    if (currentMode == SERVER) {
-        server->setPlaying(isPlaying);
-        server->setScore(playScore);
-        server->process();
-    }
-    else if (currentMode == CLIENT) {
-        serverClient->process();
     }
 }
 
@@ -1091,8 +1147,19 @@ void waitForStart() {
 }
 
 void clientModeReceive() {
-    while (serverClient->isInited()) {
+    while (serverClient->isWorking()) {
+        if (!serverClient->isInited()) continue;
         serverClient->clientReceive();
+
+        std::chrono::milliseconds timespan((int)(1000 / TPS));
+        std::this_thread::sleep_for(timespan);
+    }
+}
+
+void clientModeSend() {
+    while (serverClient->isWorking()) {
+        if (!serverClient->isInited()) continue;
+        serverClient->clientSend();
 
         std::chrono::milliseconds timespan((int)(1000 / TPS));
         std::this_thread::sleep_for(timespan);
@@ -1109,13 +1176,23 @@ void keyControl() {
 vector<string> split(string str, string delimiter) {
     vector<string> pieces = vector<string>();
 
-    size_t pos = 0;
+    auto start = 0U;
+    auto end = str.find(delimiter);
+    while (end != string::npos) {
+        string peace = str.substr(start, end - start);
+        start = end + delimiter.length();
+        end = str.find(delimiter, start);
+        pieces.push_back(peace);
+    }
+    pieces.push_back(str.substr(start, end));
+
+    /*size_t pos = 0;
     string token;
     while ((pos = str.find(delimiter)) != string::npos) {
         token = str.substr(0, pos);
         pieces.push_back(token);
         str.erase(0, pos + delimiter.length());
-    }
+    }*/
 
     return pieces;
 }
