@@ -231,7 +231,7 @@ private:
     string nickname = "";
     bool inLive = true;
     bool inited = false;
-    bool working = true;
+    bool serverInited = false;
     bool gameStarted = false;
     int startTicks = 0;
     SOCKET clientSocket;
@@ -323,6 +323,21 @@ public:
     bool isInited() {
         return inited;
     }
+    bool isServerInited() {
+        return serverInited;
+    }
+    bool isInLive() {
+        return inLive;
+    }
+    void setInLive(bool val) {
+        inLive = val;
+    }
+    int getMyScore() {
+        return myScore;
+    }
+    void setMyScore(int val) {
+        myScore = val;
+    }
     void addInBuffer(string val) {
         sendBuffer.push(val);
     }
@@ -341,11 +356,13 @@ public:
     void setSendingData(bool val) {
         sendingData = val;
     }
-    bool isWorking() {
-        return working;
-    }
-    void setWorking(bool val) {
-        working = val;
+    bool isAllCompleted() {
+        bool completed = true;
+        for (auto& sc : scores) {
+            if (sc.inLive) completed = false;
+        }
+
+        return !isInLive() && completed;
     }
 
     void process() {
@@ -389,6 +406,12 @@ public:
                 }
             }
         }
+
+        if (!isServerInited()) {
+            string sendString = "init;" + getNickname();
+            addInBuffer(sendString);
+            serverInited = true;
+        }
     }
 
     void clientReceive() {
@@ -413,8 +436,6 @@ public:
     }
 
     void sendToServer(string message) {
-        message += "&";
-
         int sentBytes = send(clientSocket, message.c_str(), (int)strlen(message.c_str()), 0);
         if (sentBytes == SOCKET_ERROR) cout << "Error on sending data to socket: " << WSAGetLastError() << endl;
     }
@@ -602,8 +623,11 @@ public:
             ids.push_back(cl.first);
         }
 
+        bool isAllCompleted = true;
         for (int keyIndex = 0; keyIndex < ids.size(); keyIndex++) {
             ServClient* client = &clients[ids[keyIndex]];
+            if (client->isInLive()) isAllCompleted = false;
+
             if (client->getLastQuery()) {
                 vector<Score> scores = vector<Score>();
                 for (int keyIndex2 = 0; keyIndex2 < ids.size(); keyIndex2++) {
@@ -627,6 +651,10 @@ public:
 
                 client->addInBuffer(clientMessage);
             }
+        }
+
+        if (isPlaying() && isAllCompleted) {
+            stop();
         }
     }
     void serverReceive() {
@@ -733,6 +761,9 @@ public:
     void setPlaying(bool val) {
         myPlaying = val;
     }
+    bool isPlaying() {
+        return myPlaying;
+    }
     void setScore(int val) {
         myScore = val;
     }
@@ -816,6 +847,9 @@ int main() {
                     waitThread.join();
                 }
                 else if (currentMode == CLIENT) {
+                    serverClient->setInLive(true);
+                    serverClient->setMyScore(playScore);
+
                     receiveThread = std::thread(clientModeReceive);
                     sendThread = std::thread(clientModeSend);
 
@@ -988,48 +1022,61 @@ void loopLogic() {
     enemyGenerationTicks = 0;
     scoreAddTicks = TPS;
 
-    while (isPlaying) {
-        keyControl();
-        player->processJump();
+    bool isGamePlaying = false;
+    if (currentMode == SINGLE) {
+        isGamePlaying = isPlaying;
+    }
+    else if (currentMode == SERVER) {
+        isGamePlaying = server->isWorking();
+    }
+    else if (currentMode == CLIENT) {
+        isGamePlaying = !serverClient->isAllCompleted();
+    }
 
-        enemyGenerationTicks--;
-        if (enemyGenerationTicks <= 0) {
-            int randHeight = 1 + rand() % 3;
-            int randWidth = 1 + rand() % 3;
-            int randNextTicks = 20 + rand() % 50;
+    while (isGamePlaying) {
+        if (isPlaying) {
+            keyControl();
+            player->processJump();
 
-            enemies.push_back(PregradaObject(randWidth, randHeight));
-            enemyGenerationTicks = randNextTicks;
-        }
+            enemyGenerationTicks--;
+            if (enemyGenerationTicks <= 0) {
+                int randHeight = 1 + rand() % 3;
+                int randWidth = 1 + rand() % 3;
+                int randNextTicks = 20 + rand() % 50;
 
-        for (int enemyIndex = 0; enemyIndex < enemies.size(); enemyIndex++) {
-            PregradaObject enemy = enemies[enemyIndex];
-            if (enemy.isInLive()) {
-                enemy.processEnemy();
+                enemies.push_back(PregradaObject(randWidth, randHeight));
+                enemyGenerationTicks = randNextTicks;
+            }
 
-                if (enemy.isCollisingWith(static_cast<GameObject&>(*player))) {
-                    //обработка проигрыша
-                    isPlaying = false;
-                    player->setInLive(false);
-                    ClearScreen();
-                    cout << "You lose with score: " << playScore << endl;
-                    return;
+            for (int enemyIndex = 0; enemyIndex < enemies.size(); enemyIndex++) {
+                PregradaObject enemy = enemies[enemyIndex];
+                if (enemy.isInLive()) {
+                    enemy.processEnemy();
+
+                    if (enemy.isCollisingWith(static_cast<GameObject&>(*player))) {
+                        //обработка проигрыша
+                        isPlaying = false;
+                        player->setInLive(false);
+                        ClearScreen();
+                        cout << "You lose with score: " << playScore << endl;
+                        return;
+                    }
+
+                    enemies[enemyIndex] = enemy;
                 }
 
-                enemies[enemyIndex] = enemy;
+                if (!enemy.isInLive()) {
+                    enemies.erase(enemies.begin() + enemyIndex);
+                    enemyIndex--;
+                }
             }
-            
-            if (!enemy.isInLive()) {
-                enemies.erase(enemies.begin() + enemyIndex);
-                enemyIndex--;
-            }
-        }
 
-        if (isPlaying && player->isInLive()) {
-            scoreAddTicks--;
-            if (scoreAddTicks <= 0) {
-                scoreAddTicks = TPS;
-                playScore++;
+            if (isPlaying && player->isInLive()) {
+                scoreAddTicks--;
+                if (scoreAddTicks <= 0) {
+                    scoreAddTicks = TPS;
+                    playScore++;
+                }
             }
         }
 
@@ -1075,7 +1122,9 @@ void loopLogic() {
             server->process();
         }
         else if (currentMode == CLIENT) {
-            //serverClient->process();
+            serverClient->setInLive(isPlaying);
+            server->setScore(playScore);
+            serverClient->process();
         }
 
         std::chrono::milliseconds timespan((int)(1000 / TPS));
@@ -1147,7 +1196,7 @@ void waitForStart() {
 }
 
 void clientModeReceive() {
-    while (serverClient->isWorking()) {
+    while (!serverClient->isAllCompleted()) {
         if (!serverClient->isInited()) continue;
         serverClient->clientReceive();
 
@@ -1157,7 +1206,7 @@ void clientModeReceive() {
 }
 
 void clientModeSend() {
-    while (serverClient->isWorking()) {
+    while (!serverClient->isAllCompleted()) {
         if (!serverClient->isInited()) continue;
         serverClient->clientSend();
 
