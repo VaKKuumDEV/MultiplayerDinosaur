@@ -382,12 +382,17 @@ public:
                         if (mode == "started") {
                             gameStarted = true;
                         }
+                        else if (mode == "closed") {
+                            string k = "";
+                        }
                         else {
                             vector<string> splitSplitSplits = split(mode, ":");
                             if (splitSplitSplits.size() == 2) {
                                 string modeMode = splitSplitSplits[0];
-                                int ticksLeft = stoi(splitSplitSplits[1]);
-                                startTicks = ticksLeft;
+                                if (modeMode == "wait") {
+                                    int ticksLeft = stoi(splitSplitSplits[1]);
+                                    startTicks = ticksLeft;
+                                }
                             }
                         }
 
@@ -411,6 +416,14 @@ public:
             string sendString = "init;" + getNickname();
             addInBuffer(sendString);
             serverInited = true;
+        }
+        else if (!isInLive()) {
+            string sendString = "died;" + to_string(getMyScore());
+            addInBuffer(sendString);
+        }
+        else {
+            string sendString = "playing;" + to_string(getMyScore());
+            addInBuffer(sendString);
         }
     }
 
@@ -523,12 +536,14 @@ private:
     string nickname;
     int myScore = 0;
     bool myPlaying = false;
+    bool isStopping = false;
 
-    void sendToClient(ServClient client, string message) {
+    bool sendToClient(ServClient client, string message) {
         message += "&";
 
         int sentBytes = send(*client.getSocket(), message.c_str(), (int)strlen(message.c_str()), 0);
-        if (sentBytes == SOCKET_ERROR) cout << "Error on sending data to socket: " << WSAGetLastError() << endl;
+        if (sentBytes == SOCKET_ERROR) return false;
+        return true;
     }
 
 public:
@@ -605,14 +620,14 @@ public:
         vector<Score> cls = vector<Score>();
         for (auto& cl : clients) {
             Score score{ cl.second.getNickname(), cl.second.getScore(), cl.second.isInLive() };
+            cls.push_back(score);
         }
 
         return cls;
     }
     void stop() {
-        for (auto& client : clients) {
-            closesocket(*client.second.getSocket());
-        }
+        started = false;
+        for (auto& client : clients) closesocket(*client.second.getSocket());
         closesocket(serverSocket);
         WSACleanup();
         working = false;
@@ -653,11 +668,21 @@ public:
             }
         }
 
-        if (isPlaying() && isAllCompleted) {
-            stop();
+        if (!isPlaying() && isAllCompleted && !isStopping) {
+            string stopMessage = "ok;closed";
+            for (int keyIndex = 0; keyIndex < ids.size(); keyIndex++) {
+                ServClient* client = &clients[ids[keyIndex]];
+
+                client->addInBuffer(stopMessage);
+            }
+
+            isStopping = true;
+            //stop();
         }
     }
     void serverReceive() {
+        if (isStopping) return;
+
         std::vector<std::string> ids = std::vector<std::string>();
         for (auto& cl : clients) {
             ids.push_back(cl.first);
@@ -667,12 +692,12 @@ public:
         for (int keyIndex = 0; keyIndex < ids.size(); keyIndex++) {
             string identificator = ids[keyIndex];
 
-            ServClient client = clients[identificator];
+            ServClient* client = &clients[identificator];
             string receivedString = "";
             bool hasError = false;
 
-            if (!client.isInLive()) continue;
-            SOCKET* clientSocket = client.getSocket();
+            if (!client->isInLive()) continue;
+            SOCKET* clientSocket = client->getSocket();
 
             if (recv(*clientSocket, buffer, sizeof(buffer), 0) == SOCKET_ERROR) {
                 //ошибка приема сокета
@@ -690,29 +715,32 @@ public:
                     if (playerStatus == "playing") {
                         if (receivedPieces.size() >= 2) {
                             int playerScore = stoi(receivedPieces[1]);
-                            client.setScore(playerScore);
+                            client->setScore(playerScore);
                             isOkay = true;
                         }
                     }
                     else if (playerStatus == "init") {
                         if (receivedPieces.size() >= 2) {
                             string playerNick = receivedPieces[1];
-                            client.setNickname(playerNick);
+                            client->setNickname(playerNick);
                             isOkay = true;
+
+                            cout << "Connected " << playerNick << " to server!" << endl;
                         }
                     }
                     else if (playerStatus == "died") {
                         if (receivedPieces.size() >= 2) {
                             int playerScore = stoi(receivedPieces[1]);
-                            client.setScore(playerScore);
-                            client.setDied();
+                            client->setScore(playerScore);
+                            client->setDied();
                             isOkay = true;
                         }
                     }
                 }
 
-                client.setLastQuery(isOkay);
+                client->setLastQuery(isOkay);
             }
+            else client->setLastQuery(!hasError);
         }
     }
     void serverSend() {
@@ -723,13 +751,25 @@ public:
 
         for (int keyIndex = 0; keyIndex < ids.size(); keyIndex++) {
             ServClient* client = &clients[ids[keyIndex]];
-            if (!client->isSendingData() && client->hasBufferData()) {
+            if (!client->isSendingData() && client->hasBufferData() && client->getLastQuery()) {
                 client->setSendingData(true);
-                sendToClient(*client, client->frontBuffer());
+                bool isSendOkay = sendToClient(*client, client->frontBuffer());
                 client->popBuffer();
+
+                if (!isSendOkay) client->setLastQuery(false);
 
                 client->setSendingData(false);
             }
+        }
+
+        if (isStopping && isStarted()) {
+            bool allDataSent = true;
+            for (int keyIndex = 0; keyIndex < ids.size(); keyIndex++) {
+                ServClient* client = &clients[ids[keyIndex]];
+                if (client->isSendingData() || client->hasBufferData()) allDataSent = false;
+            }
+
+            if (allDataSent) stop();
         }
     }
 
@@ -821,8 +861,12 @@ int main() {
                 string nickname;
                 cin >> nickname;
 
+                string serverAddress = "127.0.0.1";
+                //cout << "Enter server IP address > ";
+                //cin >> serverAddress;
+
                 serverClient = new Client(nickname);
-                serverClient->connectTo("127.0.0.1", 5555);
+                serverClient->connectTo(serverAddress, 5555);
                 if (!serverClient->isInited()) canStart = false;
             }
 
@@ -924,7 +968,7 @@ vector<vector<char>> getGameMatrix() {
     else if (currentMode == SERVER) {
         scoreStrings.push_back(server->getNickname() + (isPlaying ? "" : " (died)") + ": " + to_string(playScore));
         for (auto& sc : server->getClients()) {
-            scoreStrings.push_back(sc.nickname + + (sc.inLive ? "" : " (died)") + ": " + to_string(sc.score));
+            scoreStrings.push_back(sc.nickname + (sc.inLive ? "" : " (died)") + ": " + to_string(sc.score));
         }
     }
 
@@ -1059,7 +1103,7 @@ void loopLogic() {
                         player->setInLive(false);
                         ClearScreen();
                         cout << "You lose with score: " << playScore << endl;
-                        return;
+                        break;
                     }
 
                     enemies[enemyIndex] = enemy;
@@ -1080,40 +1124,42 @@ void loopLogic() {
             }
         }
 
-        vector<vector<char>> matrix = getGameMatrix();
-        if (!isLastMatrixInited) { 
-            lastMatrix = matrix; 
-            isLastMatrixInited = true; 
+        if (isPlaying && player->isInLive()) {
+            vector<vector<char>> matrix = getGameMatrix();
+            if (!isLastMatrixInited) {
+                lastMatrix = matrix;
+                isLastMatrixInited = true;
 
-            ClearScreen();
-            for (int i = 0; i < matrix.size(); i++) {
-                vector<char> matrixLine = vector<char>(matrix[i].size());
-                bool isEmptyLine = true;
-                for (int j = 0; j < matrix[i].size(); j++) {
-                    matrixLine[j] = matrix[i][j];
-                    if (matrixLine[j] != ' ') isEmptyLine = false;
+                ClearScreen();
+                for (int i = 0; i < matrix.size(); i++) {
+                    vector<char> matrixLine = vector<char>(matrix[i].size());
+                    bool isEmptyLine = true;
+                    for (int j = 0; j < matrix[i].size(); j++) {
+                        matrixLine[j] = matrix[i][j];
+                        if (matrixLine[j] != ' ') isEmptyLine = false;
+                    }
+
+                    if (isEmptyLine) cout << endl;
+                    else cout << string(matrixLine.begin(), matrixLine.end()) << endl;
+                }
+            }
+            else
+            {
+                vector<tuple<int, int, char>> diff = getMartrixDiff(lastMatrix, matrix);
+                if (diff.size() > 0) {
+                    for (vector<tuple<int, int, char>>::const_iterator i = diff.begin(); i != diff.end(); ++i) {
+                        int x = get<0>(*i);
+                        int y = get<1>(*i);
+                        char ch = get<2>(*i);
+
+                        setCursorPosition(x, y);
+                        cout << ch;
+                    }
+                    //setCursorPosition(0, 0);
                 }
 
-                if (isEmptyLine) cout << endl;
-                else cout << string(matrixLine.begin(), matrixLine.end()) << endl;
+                lastMatrix = matrix;
             }
-        }
-        else 
-        {
-            vector<tuple<int, int, char>> diff = getMartrixDiff(lastMatrix, matrix);
-            if (diff.size() > 0) {
-                for (vector<tuple<int, int, char>>::const_iterator i = diff.begin(); i != diff.end(); ++i) {
-                    int x = get<0>(*i);
-                    int y = get<1>(*i);
-                    char ch = get<2>(*i);
-
-                    setCursorPosition(x, y);
-                    cout << ch;
-                }
-                //setCursorPosition(0, 0);
-            }
-
-            lastMatrix = matrix;
         }
 
         if (currentMode == SERVER) {
@@ -1123,7 +1169,7 @@ void loopLogic() {
         }
         else if (currentMode == CLIENT) {
             serverClient->setInLive(isPlaying);
-            server->setScore(playScore);
+            serverClient->setMyScore(playScore);
             serverClient->process();
         }
 
@@ -1148,7 +1194,7 @@ void acceptServerConnections() {
             if (getsockname(client, (struct sockaddr*)&sin, &len) != -1) {
                 server->addClient(client);
 
-                cout << "Connected with port " << ntohs(sin.sin_port) << endl;
+                //cout << "Connected with port " << ntohs(sin.sin_port) << endl;
             }
         }
 
