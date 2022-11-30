@@ -33,6 +33,7 @@ void serverModeSend();
 void waitForStart();
 void clientModeReceive();
 void clientModeSend();
+bool isGamePlaying();
 std::pair<int, int> getConsoleSize();
 vector<string> split(string str, string delimiter);
 string randomString(const int length);
@@ -233,6 +234,7 @@ private:
     bool inited = false;
     bool serverInited = false;
     bool gameStarted = false;
+    bool serverConnectionCompleted = false;
     int startTicks = 0;
     SOCKET clientSocket;
     string recBuffer = "";
@@ -356,6 +358,9 @@ public:
     void setSendingData(bool val) {
         sendingData = val;
     }
+    vector<Score> getScores() {
+        return scores;
+    }
     bool isAllCompleted() {
         bool completed = true;
         for (auto& sc : scores) {
@@ -363,6 +368,11 @@ public:
         }
 
         return !isInLive() && completed;
+    }
+    void stop() {
+        gameStarted = false;
+        closesocket(clientSocket);
+        WSACleanup();
     }
 
     void process() {
@@ -383,7 +393,8 @@ public:
                             gameStarted = true;
                         }
                         else if (mode == "closed") {
-                            string k = "";
+                            stop();
+                            return;
                         }
                         else {
                             vector<string> splitSplitSplits = split(mode, ":");
@@ -406,6 +417,11 @@ public:
                                 Score playerS = { playerNick, playerScore, playerInLive };
                                 scores.push_back(playerS);
                             }
+                        }
+
+                        if (!serverConnectionCompleted && scores.size() > 0) {
+                            cout << "Connected to " << scores[scores.size() - 1].nickname << "'s server" << endl;
+                            serverConnectionCompleted = true;
                         }
                     }
                 }
@@ -463,7 +479,7 @@ private:
     bool inLive = true;
     bool lastQueryOkay = true;
     bool sendingData = false;
-    vector<Score> otherClients = vector<Score>();
+    bool serverWorking = true;
     queue<string> sendBuffer = queue<string>();
 
 public:
@@ -505,6 +521,7 @@ public:
         lastQueryOkay = value;
     }
     void addInBuffer(string val) {
+        if (!isServerWorking()) return;
         sendBuffer.push(val);
     }
     void popBuffer() {
@@ -521,6 +538,12 @@ public:
     }
     void setSendingData(bool val) {
         sendingData = val;
+    }
+    bool isServerWorking() {
+        return serverWorking;
+    }
+    void setServerWorking(bool val) {
+        serverWorking = val;
     }
 };
 
@@ -674,10 +697,10 @@ public:
                 ServClient* client = &clients[ids[keyIndex]];
 
                 client->addInBuffer(stopMessage);
+                client->setServerWorking(false);
             }
 
             isStopping = true;
-            //stop();
         }
     }
     void serverReceive() {
@@ -971,6 +994,12 @@ vector<vector<char>> getGameMatrix() {
             scoreStrings.push_back(sc.nickname + (sc.inLive ? "" : " (died)") + ": " + to_string(sc.score));
         }
     }
+    else if (currentMode == CLIENT) {
+        scoreStrings.push_back(serverClient->getNickname() + (isPlaying ? "" : " (died)") + ": " + to_string(playScore));
+        for (auto& sc : serverClient->getScores()) {
+            scoreStrings.push_back(sc.nickname + (sc.inLive ? "" : " (died)") + ": " + to_string(sc.score));
+        }
+    }
 
     for (int i = 0; i < scoreStrings.size(); i++) {
         int scoreX = sizes.first - scoreStrings[i].length() - 3;
@@ -1066,18 +1095,7 @@ void loopLogic() {
     enemyGenerationTicks = 0;
     scoreAddTicks = TPS;
 
-    bool isGamePlaying = false;
-    if (currentMode == SINGLE) {
-        isGamePlaying = isPlaying;
-    }
-    else if (currentMode == SERVER) {
-        isGamePlaying = server->isWorking();
-    }
-    else if (currentMode == CLIENT) {
-        isGamePlaying = !serverClient->isAllCompleted();
-    }
-
-    while (isGamePlaying) {
+    while (isGamePlaying()) {
         if (isPlaying) {
             keyControl();
             player->processJump();
@@ -1178,8 +1196,23 @@ void loopLogic() {
     }
 }
 
+bool isGamePlaying() {
+    bool isGamePlaying = false;
+    if (currentMode == SINGLE) {
+        isGamePlaying = isPlaying;
+    }
+    else if (currentMode == SERVER) {
+        isGamePlaying = server->isWorking();
+    }
+    else if (currentMode == CLIENT) {
+        isGamePlaying = !serverClient->isAllCompleted();
+    }
+
+    return isGamePlaying;
+}
+
 void acceptServerConnections() {
-    while (server->isWorking()) {
+    while (server->isWorking() && !server->isStarted()) {
         SOCKADDR_IN clientAddr{};
         int clientAddrSize = sizeof(clientAddr);
         
