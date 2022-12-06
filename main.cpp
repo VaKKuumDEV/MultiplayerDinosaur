@@ -24,6 +24,7 @@ const int SKIPPING_FRAMES = 0;
 const int FLOOR_HEIGHT = 2;
 std::pair<int, int> sizes;
 
+void ClearScreen();
 void loopLogic();
 void keyControl();
 void acceptServerConnections();
@@ -235,6 +236,7 @@ private:
     bool serverInited = false;
     bool gameStarted = false;
     bool serverConnectionCompleted = false;
+    bool serverClosed = false;
     int startTicks = 0;
     SOCKET clientSocket;
     string recBuffer = "";
@@ -362,6 +364,7 @@ public:
         return scores;
     }
     bool isAllCompleted() {
+        if (serverClosed) return true;
         bool completed = true;
         for (auto& sc : scores) {
             if (sc.inLive) completed = false;
@@ -394,6 +397,7 @@ public:
                         }
                         else if (mode == "closed") {
                             stop();
+                            serverClosed = true;
                             return;
                         }
                         else {
@@ -428,18 +432,20 @@ public:
             }
         }
 
-        if (!isServerInited()) {
-            string sendString = "init;" + getNickname();
-            addInBuffer(sendString);
-            serverInited = true;
-        }
-        else if (!isInLive()) {
-            string sendString = "died;" + to_string(getMyScore());
-            addInBuffer(sendString);
-        }
-        else {
-            string sendString = "playing;" + to_string(getMyScore());
-            addInBuffer(sendString);
+        if (!serverClosed) {
+            if (!isServerInited()) {
+                string sendString = "init;" + getNickname();
+                addInBuffer(sendString);
+                serverInited = true;
+            }
+            else if (!isInLive()) {
+                string sendString = "died;" + to_string(getMyScore());
+                addInBuffer(sendString);
+            }
+            else {
+                string sendString = "playing;" + to_string(getMyScore());
+                addInBuffer(sendString);
+            }
         }
     }
 
@@ -455,7 +461,7 @@ public:
     }
 
     void clientSend() {
-        if (!isSendingData() && hasBufferData()) {
+        if (!isSendingData() && hasBufferData() && !serverClosed) {
             setSendingData(true);
             sendToServer(frontBuffer());
             popBuffer();
@@ -927,10 +933,22 @@ int main() {
                 logicThread = std::thread(loopLogic);
                 logicThread.join();
 
-                if (currentMode == SERVER) {
+                ClearScreen();
+                if (currentMode == SINGLE) {
+                    cout << "You lose with score " << to_string(playScore) << endl;
+                }
+                else if (currentMode == SERVER) {
                     connectionsThread.detach();
-
-                    server->stop();
+                    receiveThread.detach();
+                    sendThread.detach();
+                    cout << "Game closed with your`s score " << to_string(playScore) << endl;
+                    server = NULL;
+                }
+                else if (currentMode == CLIENT) {
+                    receiveThread.detach();
+                    sendThread.detach();
+                    cout << "Game closed with your`s score " << to_string(playScore) << endl;
+                    serverClient = NULL;
                 }
             }
         }
@@ -952,31 +970,33 @@ vector<vector<char>> getGameMatrix() {
     sizes = getConsoleSize();
     vector<vector<char>> matrix = vector<vector<char>>(sizes.second - 1, vector<char>(sizes.first, ' '));
 
-    for (int floorIndex = 1; floorIndex < FLOOR_HEIGHT + 1; floorIndex++) {
-        for (int widthIndex = 0; widthIndex < sizes.first; widthIndex++) {
-            matrix[matrix.size() - floorIndex][widthIndex] = '#';
+    if (isPlaying) {
+        for (int floorIndex = 1; floorIndex < FLOOR_HEIGHT + 1; floorIndex++) {
+            for (int widthIndex = 0; widthIndex < sizes.first; widthIndex++) {
+                matrix[matrix.size() - floorIndex][widthIndex] = '#';
+            }
         }
-    }
 
-    vector<vector<char>> playerMatrix = player->getMatrix();
-    for (int y = player->getPosition().Y; y < (player->getPosition().Y + playerMatrix.size()); y++) {
-        int mY = y - player->getPosition().Y;
-        for (int x = player->getPosition().X; x < (player->getPosition().X + playerMatrix[mY].size()); x++) {
-            int mX = x - player->getPosition().X;
-            matrix[y][x] = playerMatrix[mY][mX];
+        vector<vector<char>> playerMatrix = player->getMatrix();
+        for (int y = player->getPosition().Y; y < (player->getPosition().Y + playerMatrix.size()); y++) {
+            int mY = y - player->getPosition().Y;
+            for (int x = player->getPosition().X; x < (player->getPosition().X + playerMatrix[mY].size()); x++) {
+                int mX = x - player->getPosition().X;
+                matrix[y][x] = playerMatrix[mY][mX];
+            }
         }
-    }
 
-    for (auto& enemy : enemies) {
-        if (enemy.isInLive()) {
-            vector<vector<char>> enemyMatrix = enemy.getMatrix();
+        for (auto& enemy : enemies) {
+            if (enemy.isInLive()) {
+                vector<vector<char>> enemyMatrix = enemy.getMatrix();
 
-            if ((enemy.getPosition().X + enemy.getWidth()) < sizes.first) {
-                for (int y = enemy.getPosition().Y; y < (enemy.getPosition().Y + enemyMatrix.size()); y++) {
-                    int mY = y - enemy.getPosition().Y;
-                    for (int x = enemy.getPosition().X; x < (enemy.getPosition().X + enemyMatrix[mY].size()); x++) {
-                        int mX = x - enemy.getPosition().X;
-                        matrix[y][x] = enemyMatrix[mY][mX];
+                if ((enemy.getPosition().X + enemy.getWidth()) < sizes.first) {
+                    for (int y = enemy.getPosition().Y; y < (enemy.getPosition().Y + enemyMatrix.size()); y++) {
+                        int mY = y - enemy.getPosition().Y;
+                        for (int x = enemy.getPosition().X; x < (enemy.getPosition().X + enemyMatrix[mY].size()); x++) {
+                            int mX = x - enemy.getPosition().X;
+                            matrix[y][x] = enemyMatrix[mY][mX];
+                        }
                     }
                 }
             }
@@ -1119,8 +1139,8 @@ void loopLogic() {
                         //обработка проигрыша
                         isPlaying = false;
                         player->setInLive(false);
-                        ClearScreen();
-                        cout << "You lose with score: " << playScore << endl;
+                        /*ClearScreen();
+                        cout << "You lose with score: " << playScore << endl;*/
                         break;
                     }
 
@@ -1142,42 +1162,40 @@ void loopLogic() {
             }
         }
 
-        if (isPlaying && player->isInLive()) {
-            vector<vector<char>> matrix = getGameMatrix();
-            if (!isLastMatrixInited) {
-                lastMatrix = matrix;
-                isLastMatrixInited = true;
+        vector<vector<char>> matrix = getGameMatrix();
+        if (!isLastMatrixInited) {
+            lastMatrix = matrix;
+            isLastMatrixInited = true;
 
-                ClearScreen();
-                for (int i = 0; i < matrix.size(); i++) {
-                    vector<char> matrixLine = vector<char>(matrix[i].size());
-                    bool isEmptyLine = true;
-                    for (int j = 0; j < matrix[i].size(); j++) {
-                        matrixLine[j] = matrix[i][j];
-                        if (matrixLine[j] != ' ') isEmptyLine = false;
-                    }
-
-                    if (isEmptyLine) cout << endl;
-                    else cout << string(matrixLine.begin(), matrixLine.end()) << endl;
-                }
-            }
-            else
-            {
-                vector<tuple<int, int, char>> diff = getMartrixDiff(lastMatrix, matrix);
-                if (diff.size() > 0) {
-                    for (vector<tuple<int, int, char>>::const_iterator i = diff.begin(); i != diff.end(); ++i) {
-                        int x = get<0>(*i);
-                        int y = get<1>(*i);
-                        char ch = get<2>(*i);
-
-                        setCursorPosition(x, y);
-                        cout << ch;
-                    }
-                    //setCursorPosition(0, 0);
+            ClearScreen();
+            for (int i = 0; i < matrix.size(); i++) {
+                vector<char> matrixLine = vector<char>(matrix[i].size());
+                bool isEmptyLine = true;
+                for (int j = 0; j < matrix[i].size(); j++) {
+                    matrixLine[j] = matrix[i][j];
+                    if (matrixLine[j] != ' ') isEmptyLine = false;
                 }
 
-                lastMatrix = matrix;
+                if (isEmptyLine) cout << endl;
+                else cout << string(matrixLine.begin(), matrixLine.end()) << endl;
             }
+        }
+        else
+        {
+            vector<tuple<int, int, char>> diff = getMartrixDiff(lastMatrix, matrix);
+            if (diff.size() > 0) {
+                for (vector<tuple<int, int, char>>::const_iterator i = diff.begin(); i != diff.end(); ++i) {
+                    int x = get<0>(*i);
+                    int y = get<1>(*i);
+                    char ch = get<2>(*i);
+
+                    setCursorPosition(x, y);
+                    cout << ch;
+                }
+                //setCursorPosition(0, 0);
+            }
+
+            lastMatrix = matrix;
         }
 
         if (currentMode == SERVER) {
