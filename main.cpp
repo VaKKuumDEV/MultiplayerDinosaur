@@ -471,6 +471,7 @@ public:
     }
 
     void sendToServer(string message) {
+        message += "&";
         int sentBytes = send(clientSocket, message.c_str(), (int)strlen(message.c_str()), 0);
         if (sentBytes == SOCKET_ERROR) cout << "Error on sending data to socket: " << WSAGetLastError() << endl;
     }
@@ -736,38 +737,43 @@ public:
             memset(buffer, 0, sizeof(buffer));
 
             if (!hasError) {
-                vector<string> receivedPieces = split(receivedString, ";");
-                bool isOkay = false;
+                vector<string> receivedParts = split(receivedString, "&");
+                for (string part : receivedParts) {
+                    if (part.length() == 0) continue;
+                    vector<string> receivedPieces = split(part, ";");
+                    bool isOkay = false;
 
-                if (receivedPieces.size() >= 1) {
-                    string playerStatus = receivedPieces[0];
-                    if (playerStatus == "playing") {
-                        if (receivedPieces.size() >= 2) {
-                            int playerScore = stoi(receivedPieces[1]);
-                            client->setScore(playerScore);
-                            isOkay = true;
+                    if (receivedPieces.size() >= 1) {
+                        string playerStatus = receivedPieces[0];
+                        if (playerStatus == "playing") {
+                            if (receivedPieces.size() >= 2) {
+                                int playerScore = stoi(receivedPieces[1]);
+                                client->setScore(playerScore);
+                                isOkay = true;
+                            }
                         }
-                    }
-                    else if (playerStatus == "init") {
-                        if (receivedPieces.size() >= 2) {
-                            string playerNick = receivedPieces[1];
-                            client->setNickname(playerNick);
-                            isOkay = true;
+                        else if (playerStatus == "init") {
+                            if (receivedPieces.size() >= 2) {
+                                string playerNick = receivedPieces[1];
+                                client->setNickname(playerNick);
+                                client->setInited();
+                                isOkay = true;
 
-                            cout << "Connected " << playerNick << " to server!" << endl;
+                                cout << "Connected " << playerNick << " to server!" << endl;
+                            }
+                        }
+                        else if (playerStatus == "died") {
+                            if (receivedPieces.size() >= 2) {
+                                int playerScore = stoi(receivedPieces[1]);
+                                client->setScore(playerScore);
+                                client->setDied();
+                                isOkay = true;
+                            }
                         }
                     }
-                    else if (playerStatus == "died") {
-                        if (receivedPieces.size() >= 2) {
-                            int playerScore = stoi(receivedPieces[1]);
-                            client->setScore(playerScore);
-                            client->setDied();
-                            isOkay = true;
-                        }
-                    }
+
+                    client->setLastQuery(isOkay);
                 }
-
-                client->setLastQuery(isOkay);
             }
             else client->setLastQuery(!hasError);
         }
@@ -805,15 +811,15 @@ public:
     void process() {
         serverProcess();
 
-        /*if (clients.size() == 0 && !isStarted()) startTicks = START_TICKS;
+        if (clients.size() == 0 && !isStarted()) startTicks = START_TICKS;
         else {
             bool hasNoInited = false;
             for (auto& client : clients) {
                 if (!client.second.isInited()) hasNoInited = true;
             }
 
-            startTicks = START_TICKS;
-        }*/
+            if (hasNoInited) startTicks = START_TICKS;
+        }
 
         if (startTicks <= 0) started = true;
         else startTicks--;
@@ -941,13 +947,68 @@ int main() {
                     connectionsThread.detach();
                     receiveThread.detach();
                     sendThread.detach();
+
                     cout << "Game closed with your`s score " << to_string(playScore) << endl;
+                    cout << "Top scores:" << endl;
+
+                    map<string, int> scores = map<string, int>();
+                    scores[server->getNickname()] = playScore;
+                    for (auto& client : server->getClients()) {
+                        scores[client.nickname] = client.score;
+                    }
+
+                    vector<string> scoreNicks = vector<string>();
+                    for (auto& sc : scores) scoreNicks.push_back(sc.first);
+                    for (int i = 0; i < scores.size(); i++) {
+                        for (int j = 0; j < scores.size(); j++) {
+                            if (scores[scoreNicks[i]] > scores[scoreNicks[j]]) {
+                                int c = scores[scoreNicks[j]];
+                                scores[scoreNicks[j]] = scores[scoreNicks[i]];
+                                scores[scoreNicks[i]] = c;
+                            }
+                        }
+                    }
+
+                    int topCounter = 1;
+                    for (auto& sc : scores) {
+                        cout << topCounter << ". " << sc.first << ": " << sc.second << endl;
+                        topCounter++;
+                    }
+                    cout << endl;
+
                     server = NULL;
                 }
                 else if (currentMode == CLIENT) {
                     receiveThread.detach();
                     sendThread.detach();
                     cout << "Game closed with your`s score " << to_string(playScore) << endl;
+                    cout << "Top scores:" << endl;
+
+                    map<string, int> scores = map<string, int>();
+                    scores[serverClient->getNickname()] = playScore;
+                    for (auto& client : serverClient->getScores()) {
+                        scores[client.nickname] = client.score;
+                    }
+
+                    vector<string> scoreNicks = vector<string>();
+                    for (auto& sc : scores) scoreNicks.push_back(sc.first);
+                    for (int i = 0; i < scores.size(); i++) {
+                        for (int j = 0; j < scores.size(); j++) {
+                            if (scores[scoreNicks[i]] > scores[scoreNicks[j]]) {
+                                int c = scores[scoreNicks[j]];
+                                scores[scoreNicks[j]] = scores[scoreNicks[i]];
+                                scores[scoreNicks[i]] = c;
+                            }
+                        }
+                    }
+
+                    int topCounter = 1;
+                    for (auto& sc : scores) {
+                        cout << topCounter << ". " << sc.first << ": " << sc.second << endl;
+                        topCounter++;
+                    }
+                    cout << endl;
+
                     serverClient = NULL;
                 }
             }
