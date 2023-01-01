@@ -267,7 +267,7 @@ public:
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = IPPROTO_TCP;
 
-        int addrResult = getaddrinfo("127.0.0.1", "5555", &hints, &result);
+        int addrResult = getaddrinfo(ip.c_str(), "5555", &hints, &result);
         if (addrResult != 0) {
             cout << "Error on getting address: " << addrResult << endl;
             WSACleanup();
@@ -391,7 +391,6 @@ public:
                     string status = splitSplits[0];
                     if (status == "ok" && splitSplits.size() > 1) {
                         string mode = splitSplits[1];
-                        //доделать обработку
                         if (mode == "started") {
                             gameStarted = true;
                         }
@@ -897,8 +896,8 @@ int main() {
                 cin >> nickname;
 
                 string serverAddress = "127.0.0.1";
-                //cout << "Enter server IP address > ";
-                //cin >> serverAddress;
+                cout << "Enter server IP address > ";
+                cin >> serverAddress;
 
                 serverClient = new Client(nickname);
                 serverClient->connectTo(serverAddress, 5555);
@@ -976,6 +975,7 @@ int main() {
                     }
                     cout << endl;
 
+                    delete server;
                     server = NULL;
                 }
                 else if (currentMode == CLIENT) {
@@ -1009,8 +1009,15 @@ int main() {
                     }
                     cout << endl;
 
+                    delete serverClient;
                     serverClient = NULL;
                 }
+
+                delete player;
+                player = NULL;
+            }
+            else {
+                cout << "Error on game starting" << endl;
             }
         }
     }
@@ -1095,55 +1102,6 @@ vector<vector<char>> getGameMatrix() {
     return matrix;
 }
 
-void setCursorPosition(int x, int y)
-{
-    static const HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    std::cout.flush();
-    COORD coord = { (SHORT)x, (SHORT)y };
-    SetConsoleCursorPosition(hOut, coord);
-}
-
-void ClearScreen() {
-    HANDLE                     hStdOut;
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    DWORD                      count;
-    DWORD                      cellCount;
-    COORD                      homeCoords = { 0, 0 };
-
-    hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hStdOut == INVALID_HANDLE_VALUE) return;
-
-    /* Get the number of cells in the current buffer */
-    if (!GetConsoleScreenBufferInfo(hStdOut, &csbi)) return;
-    cellCount = csbi.dwSize.X * csbi.dwSize.Y;
-
-    /* Fill the entire buffer with spaces */
-    if (!FillConsoleOutputCharacter(
-        hStdOut,
-        (TCHAR)' ',
-        cellCount,
-        homeCoords,
-        &count
-    )) return;
-
-    /* Fill the entire buffer with the current colors and attributes */
-    if (!FillConsoleOutputAttribute(
-        hStdOut,
-        csbi.wAttributes,
-        cellCount,
-        homeCoords,
-        &count
-    )) return;
-
-    /* Move the cursor home */
-    SetConsoleCursorPosition(hStdOut, homeCoords);
-}
-
-bool IsPress(char symbol)
-{
-    return (GetKeyState(symbol) & 0x8000);
-}
-
 vector<tuple<int, int, char>> getMartrixDiff(vector<vector<char>> prev, vector<vector<char>> next) {
     vector<tuple<int, int, char>> diff = vector<tuple<int, int, char>>();
     for (int y = 0; y < next.size(); y++) {
@@ -1200,8 +1158,6 @@ void loopLogic() {
                         //обработка проигрыша
                         isPlaying = false;
                         player->setInLive(false);
-                        /*ClearScreen();
-                        cout << "You lose with score: " << playScore << endl;*/
                         break;
                     }
 
@@ -1253,7 +1209,6 @@ void loopLogic() {
                     setCursorPosition(x, y);
                     cout << ch;
                 }
-                //setCursorPosition(0, 0);
             }
 
             lastMatrix = matrix;
@@ -1373,11 +1328,13 @@ void clientModeSend() {
     }
 }
 
+bool IsPress(char symbol)
+{
+    return (GetKeyState(symbol) & 0x8000);
+}
+
 void keyControl() {
-    if (IsPress(' ')) {
-        //типа прыжок
-        player->jump();
-    }
+    if (IsPress(' ')) player->jump();
 }
 
 vector<string> split(string str, string delimiter) {
@@ -1392,14 +1349,6 @@ vector<string> split(string str, string delimiter) {
         pieces.push_back(peace);
     }
     pieces.push_back(str.substr(start, end));
-
-    /*size_t pos = 0;
-    string token;
-    while ((pos = str.find(delimiter)) != string::npos) {
-        token = str.substr(0, pos);
-        pieces.push_back(token);
-        str.erase(0, pos + delimiter.length());
-    }*/
 
     return pieces;
 }
@@ -1417,4 +1366,48 @@ string randomString(const int length) {
     }
 
     return tmp_s;
+}
+
+void setCursorPosition(int x, int y)
+{
+    static const HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    std::cout.flush();
+    COORD coord = { (SHORT)x, (SHORT)y };
+    SetConsoleCursorPosition(hOut, coord);
+}
+
+void ClearScreen() {
+    HANDLE                     hStdOut;
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    DWORD                      count;
+    DWORD                      cellCount;
+    COORD                      homeCoords = { 0, 0 };
+
+    hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hStdOut == INVALID_HANDLE_VALUE) return;
+
+    /* Get the number of cells in the current buffer */
+    if (!GetConsoleScreenBufferInfo(hStdOut, &csbi)) return;
+    cellCount = csbi.dwSize.X * csbi.dwSize.Y;
+
+    /* Fill the entire buffer with spaces */
+    if (!FillConsoleOutputCharacter(
+        hStdOut,
+        (TCHAR)' ',
+        cellCount,
+        homeCoords,
+        &count
+    )) return;
+
+    /* Fill the entire buffer with the current colors and attributes */
+    if (!FillConsoleOutputAttribute(
+        hStdOut,
+        csbi.wAttributes,
+        cellCount,
+        homeCoords,
+        &count
+    )) return;
+
+    /* Move the cursor home */
+    SetConsoleCursorPosition(hStdOut, homeCoords);
 }
